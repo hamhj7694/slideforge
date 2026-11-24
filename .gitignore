@@ -1,0 +1,15 @@
+node_modules
+.next
+out
+dist
+.env
+.env.local
+.env*.local
+data/
+artifacts/*.pdf
+artifacts/*.pptx
+test-results
+playwright-report
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
