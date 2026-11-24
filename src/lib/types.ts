@@ -36,14 +36,40 @@ export const LAYOUT_LABELS: Record<LayoutKind, string> = {
   closing: "클로징",
 };
 
-export type DesignPresetId =
-  | "swiss-editorial"
-  | "modern-editorial"
-  | "minimal-corporate"
-  | "tech-product"
-  | "premium-portfolio"
-  | "data-story"
-  | "magazine";
+/** Single source of truth for every selectable slide style. */
+export const DESIGN_PRESET_IDS = [
+  // Original editorial presets
+  "swiss-editorial",
+  "modern-editorial",
+  "minimal-corporate",
+  "tech-product",
+  "premium-portfolio",
+  "data-story",
+  "magazine",
+  // User-provided style vocabulary (registered now, refined incrementally)
+  "minimalism",
+  "editorial",
+  "swiss-style",
+  "bento-grid",
+  "glassmorphism",
+  "claymorphism",
+  "neo-brutalism",
+  "maximalism",
+  "kinetic-typography",
+  "grainy-gradient",
+  "y2k-chrome",
+  "pixel-art",
+  "memphis",
+  "bauhaus",
+  "pop-art",
+  "collage",
+  "risograph",
+  "art-deco",
+  "cyberpunk",
+  "isometric",
+] as const;
+
+export type DesignPresetId = (typeof DESIGN_PRESET_IDS)[number];
 
 export interface DesignPalette {
   bg: string;
@@ -88,6 +114,8 @@ export interface DesignSystem {
     footer: boolean;
     kicker: boolean;
   };
+  /** Optional decorative motif token used by the renderer (grain, dots, grid, chrome…). */
+  motif?: string;
 }
 
 export interface SlideSection {
@@ -177,6 +205,59 @@ export interface SourceReference {
 
 export type SlideStatus = "draft" | "generated" | "ready";
 
+/** Layout-only data. Text always lives in StructuredContent; never duplicated here. */
+export interface ElementOverride {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  z?: number;
+  hidden?: boolean;
+}
+
+export type SourceType =
+  | "job-posting"
+  | "resume"
+  | "career-history"
+  | "cover-letter"
+  | "portfolio"
+  | "project-doc"
+  | "image"
+  | "website"
+  | "text";
+
+export interface JobPostingMetadata {
+  company?: string;
+  role?: string;
+  responsibilities?: string[];
+  required?: string[];
+  preferred?: string[];
+  companyInfo?: string;
+  url?: string;
+  deadline?: string;
+  capturedAt?: string;
+}
+
+export interface ProjectSource {
+  id: string;
+  projectId: string;
+  type: SourceType;
+  title: string;
+  url?: string;
+  filePath?: string;
+  originalContent: string;
+  extractedContent: string;
+  extractionStatus: "pending" | "done" | "failed";
+  metadata?: JobPostingMetadata | Record<string, unknown>;
+  importedAt: string;
+}
+
+export interface OutlinePart {
+  id: string;
+  title: string;
+  description: string;
+}
+
 export interface Slide {
   id: string;
   projectId: string;
@@ -189,13 +270,34 @@ export interface Slide {
   layout: LayoutSpec;
   designOverrides: Partial<DesignSystem>;
   sources: SourceReference[];
+  partId?: string;
+  visualOverrides: Record<string, ElementOverride>;
   status: SlideStatus;
   locked: boolean;
   createdAt: string;
   updatedAt: string;
 }
 
+export type ReferenceRole = "structure" | "style" | "both";
+
+export interface ReferenceAnalysis {
+  role: ReferenceRole;
+  label: string;
+  sourceType: SourceType;
+  summary: string;
+  sectionTitles: string[];
+  pageCountHint?: number;
+  layoutHints: LayoutKind[];
+  density: "low" | "medium" | "high";
+  toneKeywords: string[];
+  styleCues: string[];
+  presetHint?: DesignPresetId;
+  paletteHints: string[];
+  confidence: "heuristic";
+}
+
 export interface ProjectBrief {
+  parts: OutlinePart[];
   purpose: string;
   audience: string;
   coreMessage: string;
@@ -208,6 +310,7 @@ export interface ProjectBrief {
 
 export interface OutlineItem {
   id: string;
+  partId?: string;
   title: string;
   role: string;
   keyMessage: string;
@@ -231,6 +334,7 @@ export interface Project {
 
 export interface ProjectWithSlides extends Project {
   slides: Slide[];
+  sources: ProjectSource[];
 }
 
 export interface SlideVersion {

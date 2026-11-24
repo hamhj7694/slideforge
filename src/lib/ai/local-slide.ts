@@ -29,6 +29,7 @@ export interface LocalSlideResult {
 
 interface Parsed {
   title: string;
+  lede: string;
   subtitle: string;
   kicker: string;
   paragraphs: string[];
@@ -318,6 +319,7 @@ function parseInput(input: LocalSlideInput): Parsed {
 
   return {
     title: truncate(title, 120),
+    lede,
     subtitle: truncate(subtitle, 140),
     kicker: truncate(kicker, 48),
     paragraphs,

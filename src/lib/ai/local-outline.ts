@@ -1,9 +1,11 @@
 import type {
   LayoutKind,
   OutlineItem,
+  OutlinePart,
   ProjectBrief,
+  ReferenceAnalysis,
 } from "../types";
-import { firstSentence, stripMarkdown, truncate } from "../utils";
+import { firstSentence, newId, stripMarkdown, truncate } from "../utils";
 
 export interface OutlineSource {
   label: string;
@@ -18,6 +20,7 @@ export interface OutlineInput {
   tone?: string;
   pageCount?: number;
   sources?: OutlineSource[];
+  references?: ReferenceAnalysis[];
   preset?: string;
 }
 
@@ -41,7 +44,8 @@ function extractExplicitTitles(prompt: string): string[] {
   const numbered = lines
     .map((line) => line.match(/^(\d{1,2})[.)]\s+(.{2,90})$/))
     .filter((m): m is RegExpMatchArray => Boolean(m))
-    .map((m) => stripMarkdown(m[2]).replace(/\s*[-–—:]\s*$/, ""));
+    .map((m) => stripMarkdown(m[2]).replace(/\s*[-–—:]\s*$/, ""))
+    .filter((title) => !/^(주의|참고|메모|설명|주의사항)\s*[:：]/.test(title));
   if (numbered.length >= 3) return numbered.slice(0, 30);
 
   const headings = lines
@@ -55,12 +59,51 @@ function extractExplicitTitles(prompt: string): string[] {
     .map((line) => stripMarkdown(line))
     .filter((line) => line.length <= 70);
   if (bulletTitles.length >= 4 && bulletTitles.length <= 20) return bulletTitles;
+
+  // One long sentence often carries the whole outline as a comma-separated list.
+  if (/순서대로|구성|목차|포함|페이지로/.test(prompt)) {
+    // Drop the request sentence and label fields before reading the list, so
+    // "6페이지로 만들어 주세요. 제목: ..." does not become a chapter title.
+    const clauses = prompt
+      .split(/(?<=[.!?。])\s+|\r?\n/)
+      .map((clause) => clause.trim())
+      .filter(Boolean)
+      .filter(
+        (clause) =>
+          !/^(제목|타이틀|title|프로젝트명|목적|용도|purpose|독자|대상|타깃|audience|톤|어조|분위기|tone)\s*[:：]/i.test(
+            clause,
+          ),
+      )
+      .filter(
+        (clause) =>
+          !/(만들어\s*주세요|작성해\s*주세요|생성해\s*주세요|요청합니다|부탁합니다)/.test(
+            clause,
+          ),
+      );
+    const items = clauses
+      .join(" ")
+      .split(/[,、]/)
+      .map((item) => item.trim().replace(/^\d{1,2}[.)]\s*/, ""))
+      .map((item) =>
+        item
+          .replace(/(?:\s*(?:을|를|이|가|과|와)?\s*(?:순서대로|이어|포함|넣어|작성|만들어|정리해|다루어).*)$/, "")
+          .trim(),
+      )
+      .filter(
+        (item) =>
+          item.length >= 2 &&
+          item.length <= 30 &&
+          !/[.。]$/.test(item) &&
+          !/(만들지|주세요|요청)/.test(item),
+      );
+    if (items.length >= 4) return items.slice(0, 30);
+  }
   return [];
 }
 
 function roleForTitle(title: string, index: number): { role: string; visual: LayoutKind } {
   const t = title.toLowerCase();
-  if (index === 0 || /표지|커버|소개|intro|cover|title/.test(t)) return { role: "표지 · 자기소개", visual: "cover" };
+  if (/표지|커버|소개|intro|cover|title/.test(t)) return { role: "표지 · 자기소개", visual: "cover" };
   if (/목차|agenda|contents/.test(t)) return { role: "목차", visual: "section" };
   if (/역량|강점|스킬|capabilit|competenc|skill/.test(t)) return { role: "핵심 역량", visual: "editorial-3col" };
   if (/문제|이슈|pain|problem|간극/.test(t)) return { role: "문제 정의", visual: "statement" };
@@ -79,11 +122,18 @@ function roleForTitle(title: string, index: number): { role: string; visual: Lay
 }
 
 function sentences(text: string): string[] {
-  return stripMarkdown(text)
-    .replace(/([.!?。])\s+/g, "$1\n")
-    .split(/\n+/)
+  return text
+    .split(/\r?\n/)
+    .flatMap((line) => stripMarkdown(line).split(/([.!?。])\s+/))
     .map((line) => line.trim())
-    .filter((line) => line.length >= 12);
+    .filter(
+      (line) =>
+        line.length >= 12 &&
+        !/^(주의|참고|메모|설명|주의사항)\s*[:：]/.test(line) &&
+        !/^(제목|목적|독자|톤)\s*[:：]/i.test(line) &&
+        !/(순서대로|이어\s*주세요|작성해\s*주세요|만들어\s*주세요)/.test(line) &&
+        (line.match(/[,、]/g)?.length ?? 0) < 4,
+    );
 }
 
 function bestSupportingSentence(title: string, pool: string): string {
@@ -120,11 +170,35 @@ function inferSubject(input: OutlineInput): string {
 }
 
 export function buildLocalOutline(input: OutlineInput): ProjectBrief {
-  const pool = [input.masterPrompt, ...(input.sources ?? []).map((s) => s.content)].join("\n\n");
+  const references = input.references ?? [];
+  const referenceTitles = [
+    ...new Set(
+      references
+        .filter((reference) => reference.role !== "style")
+        .flatMap((reference) => reference.sectionTitles),
+    ),
+  ].slice(0, 30);
+  const pool = [
+    input.masterPrompt,
+    ...(input.sources ?? []).map((s) => s.content),
+    ...references.map((reference) => `${reference.summary} ${reference.styleCues.join(" ")}`),
+  ].join("\n\n");
   const subject = inferSubject(input);
-  const explicit = extractExplicitTitles(input.masterPrompt);
-  const requested = input.pageCount ?? (explicit.length || 8);
+  const explicit = referenceTitles.length
+    ? referenceTitles
+    : extractExplicitTitles(input.masterPrompt);
+  const referencePageCount = references.find((reference) => reference.pageCountHint)?.pageCountHint;
+  const requested = input.pageCount ?? referencePageCount ?? (explicit.length || 8);
   const count = Math.max(3, Math.min(30, explicit.length || requested));
+  const parts: OutlinePart[] = [
+    { id: "part-intro", title: "PART 1 — 소개와 맥락", description: "정체성, 핵심 메시지, 관련 경험" },
+    { id: "part-evidence", title: "PART 2 — 근거와 성장", description: "문제 인식, 과정, 시행착오, 구현 결과" },
+    { id: "part-offer", title: "PART 3 — 제안과 다음 단계", description: "확장 계획과 상대에게 줄 가치" },
+  ];
+  const partFor = (index: number) => {
+    const position = index / Math.max(1, count);
+    return position < 0.34 ? parts[0].id : position < 0.72 ? parts[1].id : parts[2].id;
+  };
   const outline: OutlineItem[] = [];
 
   for (let i = 0; i < count; i += 1) {
@@ -139,7 +213,8 @@ export function buildLocalOutline(input: OutlineInput): ProjectBrief {
         ? `${title}에 대한 핵심 근거와 결과를 한 페이지로 압축한다.`
         : arc.message(subject));
     outline.push({
-      id: "",
+      id: newId("ol"),
+      partId: partFor(i),
       title,
       role: mapped.role,
       keyMessage,
@@ -150,7 +225,8 @@ export function buildLocalOutline(input: OutlineInput): ProjectBrief {
   // A deck should end with a closing slide when the user did not specify a list.
   if (!explicit.length && count >= 4) {
     outline[count - 1] = {
-      id: "",
+      id: newId("ol"),
+      partId: parts[2].id,
       title: /감사|마무리|클로징/.test(outline[count - 1].title) ? outline[count - 1].title : "감사합니다",
       role: "클로징",
       keyMessage: "핵심 메시지를 다시 각인시키고 다음 대화를 여는 한 페이지.",
@@ -158,12 +234,19 @@ export function buildLocalOutline(input: OutlineInput): ProjectBrief {
     };
   }
 
+  const visualRef = references.find(
+    (reference) =>
+      reference.role !== "structure" &&
+      Boolean(reference.presetHint || reference.styleCues.length),
+  );
+  const refTone = [...new Set(references.flatMap((reference) => reference.toneKeywords))].join(", ");
   const coreMessage =
     firstSentence(input.purpose || "") ||
     bestSupportingSentence(subject, pool) ||
     `${subject}의 가치를 명확한 근거와 시각적 구조로 설득한다.`;
 
   return {
+    parts,
     purpose:
       input.purpose?.trim() ||
       `‘${subject}’의 가치와 실행 근거를 한 번의 발표로 설득한다.`,
@@ -171,13 +254,24 @@ export function buildLocalOutline(input: OutlineInput): ProjectBrief {
       input.audience?.trim() ||
       "해당 주제에 대해 판단해야 하는 의사결정자와 실무자",
     coreMessage,
-    storyline:
-      "문제 제기 → 관점 제시 → 근거와 사례 → 실행 계획 → 기여 제안의 흐름으로 구성했습니다. 각 페이지는 하나의 메시지만 맡고, 앞뒤 페이지가 논리적으로 연결되도록 설계했습니다.",
+    storyline: referenceTitles.length
+      ? "참고 자료에서 추출한 섹션 순서를 기준으로 구성했습니다. 각 페이지에 하나의 메시지를 맡기고, 입력 자료에서 근거를 찾습니다."
+      : "문제 제기 → 관점 제시 → 근거와 사례 → 실행 계획 → 기여 제안의 흐름으로 구성했습니다. 각 페이지는 하나의 메시지만 맡고, 앞뒤 페이지가 논리적으로 연결되도록 설계했습니다.",
     tone:
       input.tone?.trim() ||
-      "절제된 자신감. 과장 없이 근거로 말하고, 숫자와 이미지로 증명한다.",
-    visualDirection:
-      input.preset === "swiss-editorial"
+      (refTone
+        ? `참고 자료의 톤을 따릅니다: ${refTone}. 근거 없는 수치는 넣지 않습니다.`
+        : "절제된 자신감. 과장 없이 근거로 말하고, 숫자와 이미지로 증명한다."),
+    visualDirection: visualRef
+      ? `참고 자료 기준: ${[
+          visualRef.presetHint ? `프리셋 ${visualRef.presetHint}` : "",
+          ...visualRef.styleCues,
+          ...visualRef.toneKeywords,
+          visualRef.paletteHints.length ? `색상 ${visualRef.paletteHints.join(", ")}` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")}. ${visualRef.label}의 구성을 따릅니다.`
+      : input.preset === "swiss-editorial"
         ? "Swiss editorial: 강한 그리드, 큰 타이포그래피, 단일 고채도 액센트, 장식 최소화."
         : input.preset === "premium-portfolio"
           ? "Premium portfolio: 깊은 잉크 배경, 세리프 디스플레이, 넉넉한 여백, 금빛 디테일."
@@ -186,6 +280,9 @@ export function buildLocalOutline(input: OutlineInput): ProjectBrief {
             : "Modern editorial: 따뜻한 종이 톤, 세리프 헤드라인, 비대칭 그리드, 이미지 중심 구성.",
     differentiators: [
       "입력 자료에 있는 사실만 사용하고, 출처 없는 수치는 만들지 않습니다.",
+      ...(references.length
+        ? ["참고 자료에서 추출한 섹션과 스타일 단서를 디자인에 반영했습니다."]
+        : []),
       "모든 페이지가 하나의 디자인 시스템과 스토리라인을 공유합니다.",
       "페이지별 역할을 분리해 같은 말이 반복되지 않게 합니다.",
     ],

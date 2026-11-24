@@ -1,5 +1,7 @@
 import { z } from "zod";
-import { LAYOUT_KINDS } from "./types";
+import { DESIGN_PRESET_IDS, LAYOUT_KINDS } from "./types";
+
+export const designPresetSchema = z.enum(DESIGN_PRESET_IDS);
 
 export const attachmentSchema = z.object({
   id: z.string().optional(),
@@ -32,7 +34,7 @@ export const imageSchema = z.object({
 
 export const contentSchema = z.object({
   kicker: z.string().optional(),
-  title: z.string().default(""),
+  title: z.string(),
   subtitle: z.string().optional(),
   lede: z.string().optional(),
   sections: z.array(sectionSchema).max(5).optional(),
@@ -102,15 +104,7 @@ const paletteSchema = z.object({
 });
 
 export const designSystemSchema = z.object({
-  preset: z.enum([
-    "swiss-editorial",
-    "modern-editorial",
-    "minimal-corporate",
-    "tech-product",
-    "premium-portfolio",
-    "data-story",
-    "magazine",
-  ]),
+  preset: designPresetSchema,
   name: z.string(),
   mode: z.enum(["light", "dark"]),
   palette: paletteSchema,
@@ -141,6 +135,47 @@ export const designSystemSchema = z.object({
   }),
 });
 
+export const sourceKindSchema = z.enum([
+  "job-posting",
+  "resume",
+  "career-history",
+  "cover-letter",
+  "portfolio",
+  "project-doc",
+  "image",
+  "website",
+  "text",
+]);
+
+export const referenceRoleSchema = z.enum(["structure", "style", "both"]);
+
+export const referenceAnalysisSchema = z.object({
+  role: referenceRoleSchema,
+  label: z.string().max(160),
+  sourceType: sourceKindSchema,
+  summary: z.string().max(400),
+  sectionTitles: z.array(z.string().max(120)).max(30),
+  pageCountHint: z.number().int().min(1).max(50).optional(),
+  layoutHints: z.array(z.enum(LAYOUT_KINDS)).max(20),
+  density: z.enum(["low", "medium", "high"]),
+  toneKeywords: z.array(z.string().max(60)).max(10),
+  styleCues: z.array(z.string().max(60)).max(10),
+  presetHint: designPresetSchema.optional(),
+  paletteHints: z.array(z.string().max(20)).max(6),
+  confidence: z.literal("heuristic"),
+});
+
+export const referenceInputSchema = z.object({
+  label: z.string().min(1).max(160),
+  role: referenceRoleSchema,
+  sourceType: sourceKindSchema,
+  uploadId: z.string().optional(),
+  url: z.string().url().optional(),
+  text: z.string().max(50000).optional(),
+  note: z.string().max(2000).optional(),
+  paletteHints: z.array(z.string().max(20)).max(6).optional(),
+});
+
 export const createProjectSchema = z.object({
   title: z.string().max(120).optional(),
   masterPrompt: z.string().min(10, "프롬프트를 10자 이상 입력해 주세요.").max(20000),
@@ -148,26 +183,49 @@ export const createProjectSchema = z.object({
   audience: z.string().max(500).optional(),
   tone: z.string().max(300).optional(),
   pageCount: z.number().int().min(3).max(30).optional(),
-  preset: z
-    .enum([
-      "swiss-editorial",
-      "modern-editorial",
-      "minimal-corporate",
-      "tech-product",
-      "premium-portfolio",
-      "data-story",
-      "magazine",
-    ])
+  forceProvider: z.enum(["local", "openai", "anthropic", "openrouter"]).optional(),
+  forceModel: z.string().max(120).optional(),
+  preset: designPresetSchema
     .optional(),
   sources: z
     .array(
       z.object({
         uploadId: z.string().optional(),
         label: z.string(),
-        kind: z.enum(["file", "url", "text"]),
+        kind: sourceKindSchema,
         url: z.string().optional(),
         text: z.string().max(50000).optional(),
         mime: z.string().optional(),
+        metadata: z.record(z.unknown()).optional(),
+      }),
+    )
+    .max(20)
+    .optional(),
+  references: z
+    .array(referenceInputSchema.extend({ analysis: referenceAnalysisSchema }))
+    .max(10)
+    .optional(),
+});
+
+/** One-shot intake: the server classifies files and analyses references. */
+export const studioCreateSchema = z.object({
+  masterPrompt: z.string().min(10, "자료와 요청을 10자 이상 입력해 주세요.").max(30000),
+  title: z.string().max(120).optional(),
+  pageCount: z.number().int().min(3).max(30).optional(),
+  preset: designPresetSchema.optional(),
+  forceProvider: z.enum(["local", "openai", "anthropic", "openrouter"]).optional(),
+  forceModel: z.string().max(120).optional(),
+  sources: z
+    .array(
+      z.object({
+        uploadId: z.string().optional(),
+        label: z.string().min(1).max(160),
+        kind: sourceKindSchema.optional(),
+        url: z.string().optional(),
+        text: z.string().max(50000).optional(),
+        mime: z.string().optional(),
+        isReference: z.boolean().optional(),
+        note: z.string().max(2000).optional(),
       }),
     )
     .max(20)
@@ -190,9 +248,17 @@ export const updateProjectSchema = z.object({
       tone: z.string(),
       visualDirection: z.string(),
       differentiators: z.array(z.string()),
+      parts: z.array(
+        z.object({
+          id: z.string(),
+          title: z.string(),
+          description: z.string(),
+        }),
+      ),
       outline: z.array(
         z.object({
           id: z.string(),
+          partId: z.string().optional(),
           title: z.string(),
           role: z.string(),
           keyMessage: z.string(),
@@ -217,10 +283,31 @@ export const updateSlideSchema = z.object({
   content: contentSchema.optional(),
   layout: layoutSchema.optional(),
   designOverrides: z.record(z.unknown()).optional(),
+  visualOverrides: z.record(
+    z.object({
+      x: z.number().optional(),
+      y: z.number().optional(),
+      width: z.number().optional(),
+      height: z.number().optional(),
+      z: z.number().optional(),
+      hidden: z.boolean().optional(),
+    }),
+  ).optional(),
+  partId: z.string().optional(),
   attachments: z.array(attachmentSchema).max(12).optional(),
   status: z.enum(["draft", "generated", "ready"]).optional(),
   locked: z.boolean().optional(),
-  sources: z.array(z.record(z.unknown())).optional(),
+  sources: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        label: z.string(),
+        kind: z.enum(["file", "url", "text"]),
+        url: z.string().optional(),
+        excerpt: z.string().optional(),
+      }),
+    )
+    .optional(),
 });
 
 export const generateSlideSchema = z.object({
@@ -246,9 +333,17 @@ export const outlineSaveSchema = z.object({
     tone: z.string(),
     visualDirection: z.string(),
     differentiators: z.array(z.string()),
+    parts: z.array(
+      z.object({
+        id: z.string(),
+        title: z.string(),
+        description: z.string(),
+      }),
+    ),
     outline: z.array(
       z.object({
         id: z.string(),
+        partId: z.string().optional(),
         title: z.string(),
         role: z.string(),
         keyMessage: z.string(),
@@ -256,30 +351,12 @@ export const outlineSaveSchema = z.object({
       }),
     ),
   }),
-  designPreset: z
-    .enum([
-      "swiss-editorial",
-      "modern-editorial",
-      "minimal-corporate",
-      "tech-product",
-      "premium-portfolio",
-      "data-story",
-      "magazine",
-    ])
+  designPreset: designPresetSchema
     .optional(),
 });
 
 export const designUpdateSchema = z.object({
-  preset: z
-    .enum([
-      "swiss-editorial",
-      "modern-editorial",
-      "minimal-corporate",
-      "tech-product",
-      "premium-portfolio",
-      "data-story",
-      "magazine",
-    ])
+  preset: designPresetSchema
     .optional(),
   overrides: z
     .object({
@@ -297,9 +374,36 @@ export const importUrlSchema = z.object({
 });
 
 export const settingsSchema = z.object({
-  provider: z.enum(["local", "openai", "anthropic", "openrouter"]),
-  model: z.string().max(120),
+  provider: z.enum(["local", "openai", "anthropic", "openrouter"]).optional(),
+  model: z.string().max(120).optional(),
   baseUrl: z.string().max(300).optional(),
+  apiKey: z.string().max(400).optional(),
+  clearApiKey: z.boolean().optional(),
+});
+
+export const sourceCreateSchema = z.object({
+  type: sourceKindSchema.optional(),
+  kind: sourceKindSchema.optional(),
+  title: z.string().min(1).max(160),
+  url: z.string().url().optional(),
+  text: z.string().max(50000).optional(),
+  uploadId: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+export const versionCreateSchema = z.object({
+  label: z.string().max(160).optional(),
+  designPreset: designPresetSchema
+    .optional(),
+  instruction: z.string().max(2000).optional(),
+  mode: z.enum(["design", "content", "both"]).default("design"),
+});
+
+export const bulkRegenerateSchema = z.object({
+  mode: z.enum(["design", "content", "both"]),
+  instruction: z.string().max(2000).optional(),
+  slideIds: z.array(z.string()).optional(),
+  respectLocked: z.boolean().default(true),
 });
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;

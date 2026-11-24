@@ -51,6 +51,8 @@ function createDb() {
       layout TEXT NOT NULL,
       design_overrides TEXT NOT NULL DEFAULT '{}',
       sources TEXT NOT NULL DEFAULT '[]',
+      part_id TEXT,
+      visual_overrides TEXT NOT NULL DEFAULT '{}',
       status TEXT NOT NULL DEFAULT 'draft',
       locked INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
@@ -77,6 +79,8 @@ function createDb() {
       stored_name TEXT,
       excerpt TEXT NOT NULL DEFAULT '',
       content TEXT NOT NULL DEFAULT '',
+      extraction_status TEXT NOT NULL DEFAULT 'done',
+      metadata TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS uploads (
@@ -109,6 +113,12 @@ function createDb() {
       cost_usd REAL NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS secrets (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      api_key TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS app_settings (
       id TEXT PRIMARY KEY,
       provider TEXT NOT NULL DEFAULT 'local',
@@ -117,6 +127,20 @@ function createDb() {
       updated_at TEXT NOT NULL
     );
   `);
+
+  const ensureColumn = (table: string, column: string, ddl: string) => {
+    const columns = sqlite
+      .prepare(`PRAGMA table_info(${table})`)
+      .all() as { name: string }[];
+    if (!columns.some((item) => item.name === column)) {
+      sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+    }
+  };
+  ensureColumn("slides", "part_id", "part_id TEXT");
+  ensureColumn("slides", "visual_overrides", "visual_overrides TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn("sources", "extraction_status", "extraction_status TEXT NOT NULL DEFAULT 'done'");
+  ensureColumn("sources", "metadata", "metadata TEXT NOT NULL DEFAULT '{}'");
+
   return { sqlite, db: drizzle(sqlite, { schema }) };
 }
 

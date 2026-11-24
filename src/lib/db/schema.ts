@@ -10,6 +10,7 @@ import type {
   LayoutSpec,
   OutlineItem,
   ProjectBrief,
+  SourceReference,
   SlideStatus,
   StructuredContent,
 } from "../types";
@@ -58,9 +59,14 @@ export const slides = sqliteTable("slides", {
     .notNull()
     .default({}),
   sources: text("sources", { mode: "json" })
-    .$type<Record<string, unknown>[]>()
+    .$type<SourceReference[]>()
     .notNull()
     .default([]),
+  partId: text("part_id"),
+  visualOverrides: text("visual_overrides", { mode: "json" })
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({}),
   status: text("status", { mode: "json" })
     .$type<SlideStatus>()
     .notNull()
@@ -92,6 +98,11 @@ export const sources = sqliteTable("sources", {
   storedName: text("stored_name"),
   excerpt: text("excerpt").notNull().default(""),
   content: text("content").notNull().default(""),
+  extractionStatus: text("extraction_status").notNull().default("done"),
+  metadata: text("metadata", { mode: "json" })
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({}),
   createdAt: text("created_at").notNull(),
 });
 
@@ -129,6 +140,13 @@ export const usage = sqliteTable("usage", {
   outputTokens: integer("output_tokens").notNull().default(0),
   costUsd: real("cost_usd").notNull().default(0),
   createdAt: text("created_at").notNull(),
+});
+
+export const secrets = sqliteTable("secrets", {
+  id: text("id").primaryKey(),
+  provider: text("provider").notNull(),
+  apiKey: text("api_key").notNull(),
+  updatedAt: text("updated_at").notNull(),
 });
 
 export const appSettings = sqliteTable("app_settings", {
